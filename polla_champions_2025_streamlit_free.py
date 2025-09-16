@@ -202,7 +202,7 @@ with st.expander("ℹ️ ¿Cómo funciona?", expanded=False):
         """
     )
 
-participar_tab, admin_tab, ranking_tab, config_tab = st.tabs(["🎟️ Participar", "🛠️ Admin", "🏆 Ranking", "⚙️ Configuración"])
+participar_tab, admin_tab, ranking_tab, consulta_tab, config_tab = st.tabs(["🎟️ Participar", "🛠️ Admin", "🏆 Ranking", "🔎 Mis pronósticos", "⚙️ Configuración"])
 
 # ---------- Render de tarjeta de partido ----------
 
@@ -483,6 +483,70 @@ with ranking_tab:
             detail = detail.merge(teams, left_on="match_id", right_index=True, how="left")
             cols = ["name","match_id","home","away","home_pred","away_pred","home_goals","away_goals","points"]
             st.dataframe(detail[cols].sort_values(["name","match_id"]))
+
+# ------------- Mis pronósticos -------------
+with consulta_tab:
+    st.subheader("Consulta tus pronósticos por nombre")
+
+    # Recargamos picks por si hubo cambios durante la sesión
+    picks_all = load_picks()
+    fx_all = load_fixtures()
+
+    if picks_all.empty:
+        st.info("Aún no hay pronósticos registrados.")
+    else:
+        # Lista de nombres registrados (únicos)
+        nombres = sorted(picks_all["name"].astype(str).unique().tolist())
+
+        # Si el usuario ya escribió su nombre en "Participar", lo preseleccionamos:
+        preseleccion = 0
+        if 'name' in locals() and isinstance(name, str) and name.strip():
+            try:
+                preseleccion = nombres.index(name.strip())
+            except ValueError:
+                preseleccion = 0
+
+        nombre_sel = st.selectbox("Selecciona tu nombre (tal como lo registraste)", nombres, index=preseleccion)
+
+        # Filtrado case-insensitive
+        df_user = picks_all[picks_all["name"].astype(str).str.lower() == nombre_sel.lower()].copy()
+
+        # Enriquecer con datos del fixture para mostrar equipos, etapa y hora
+        if not fx_all.empty and not df_user.empty:
+            df_user = df_user.merge(
+                fx_all[["match_id", "stage", "kickoff_utc", "home", "away"]],
+                on="match_id", how="left"
+            )
+
+            # Hora UTC y (opcional) hora Lima usando tus utilidades
+            df_user["_dt"] = df_user["kickoff_utc"].apply(parse_to_aware_utc)
+
+            # Formato hora Lima si la preferencia está activa
+            if cfg.get("show_local_time", True):
+                df_user["hora_lima"] = df_user["_dt"].apply(
+                    lambda d: d.astimezone(ZoneInfo("America/Lima")).strftime("%Y-%m-%d %H:%M") if d else ""
+                )
+
+            # Orden bonito por etapa y partido
+            df_user = df_user.sort_values(["stage", "match_id"]).reset_index(drop=True)
+
+            # Selección de columnas a mostrar
+            cols_base = ["stage", "match_id", "home", "away", "home_pred", "away_pred", "kickoff_utc"]
+            if "hora_lima" in df_user.columns:
+                cols_base.insert(cols_base.index("kickoff_utc") + 1, "hora_lima")
+            cols_base.append("ts_utc")  # marca de tiempo del envío
+
+            st.dataframe(df_user[cols_base], use_container_width=True)
+
+            # Descarga en CSV
+            st.download_button(
+                "Descargar mis pronósticos (CSV)",
+                data=df_user[cols_base].to_csv(index=False).encode("utf-8"),
+                file_name=f"pronosticos_{nombre_sel}.csv",
+                use_container_width=True
+            )
+        else:
+            st.info("No hay fixtures cargados o el usuario aún no tiene pronósticos.")
 
 # ------------- Config -------------
 with config_tab:
